@@ -1,0 +1,6 @@
+@MarketMate_HostAddress = http://localhost:5101
+
+GET {{MarketMate_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

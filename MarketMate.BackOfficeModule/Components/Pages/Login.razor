@@ -1,0 +1,68 @@
+﻿@page "/login"
+@using MarketMate.BackOfficeModule.Interfaces
+@inject IAuthService AuthService
+@inject NavigationManager Navigation
+
+<h3>VK Authentication</h3>
+
+@if (!AuthService.IsAuthenticated)
+{
+    <EditForm Model="@authModel" OnValidSubmit="HandleValidSubmit" FormName="LoginForm">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        <div>
+            <label>Login: </label>
+            <InputText id="login" @bind-Value="authModel.Login" />
+        </div>
+        <div>
+            <label>Password: </label>
+            <InputText id="password" @bind-Value="authModel.Password" type="password" />
+        </div>
+
+        <button type="submit">Login</button>
+    </EditForm>
+
+    @if (errorMessage != null)
+    {
+        <div>@errorMessage</div>
+    }
+}
+else
+{
+    <div>
+        <p>Successfully authenticated!</p>
+        <button @onclick="Logout">Logout</button>
+    </div>
+}
+
+@code {
+    private AuthModel authModel = new AuthModel();
+    private string errorMessage;
+
+    private async Task HandleValidSubmit()
+    {
+        var success = await AuthService.AuthenticateAsync(authModel.Login, authModel.Password);
+        if (success)
+        {
+            errorMessage = null;
+            Navigation.NavigateTo("/");
+        }
+        else
+        {
+            errorMessage = "Authentication failed. Please try again.";
+        }
+    }
+
+    private void Logout()
+    {
+        AuthService.Logout();
+        Navigation.NavigateTo("/login");
+    }
+
+    public class AuthModel
+    {
+        public string Login { get; set; }
+        public string Password { get; set; }
+    }
+}

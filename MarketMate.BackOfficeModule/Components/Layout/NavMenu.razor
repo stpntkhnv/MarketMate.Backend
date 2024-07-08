@@ -1,0 +1,24 @@
+﻿@using MarketMate.BackOfficeModule.Interfaces
+@inject IAuthService AuthService
+
+<div class="nav-menu">
+    <ul>
+        <li><NavLink href="/" Match="NavLinkMatch.All">Home</NavLink></li>
+        @if (AuthService.IsAuthenticated)
+        {
+            <li>Hello, @AuthService.UserName</li>
+            <li><button @onclick="Logout">Logout</button></li>
+        }
+        else
+        {
+            <li><NavLink href="/login">Login</NavLink></li>
+        }
+    </ul>
+</div>
+
+@code {
+    private void Logout()
+    {
+        AuthService.Logout();
+    }
+}
