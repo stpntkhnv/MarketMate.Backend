@@ -1,5 +1,6 @@
 ﻿using MarketMate.Application.Abstractions.HttpClients;
 using MarketMate.Contracts.Models.VkApi;
+using Serilog;
 
 namespace MarketMate.Infrastructure.HttpClients.VkMethods;
 
@@ -93,6 +94,8 @@ public class VkMethodsApiClient : HttpClientBase, IVkMethodsApiClient
     public async Task<List<UserInfo>> GetUsersListAsync(List<long> userIds)
     {
         var url = VkMethodsApiUrlProvider.GetUsersListUrl(string.Join(',', userIds), _commonParameters.AccessToken, _commonParameters.ApiVersion);
+
+        Log.Information(url);
 
         var response = await GetAsync<VkResponse<List<UserInfo>>>(url);
          

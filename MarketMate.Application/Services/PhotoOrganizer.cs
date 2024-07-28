@@ -1,4 +1,5 @@
-﻿using LiteDB;
+﻿using Google.Cloud.Location;
+using LiteDB;
 using MarketMate.Application.Abstractions.HttpClients;
 using MarketMate.Application.Abstractions.Services;
 using MarketMate.Application.Models;
@@ -8,6 +9,8 @@ using MarketMate.Utilities.Helpers.Interfaces;
 using Newtonsoft.Json;
 using Serilog;
 using System.Collections.Specialized;
+using System.Reactive.Joins;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace MarketMate.Application.Services;
@@ -17,6 +20,23 @@ public class PhotoOrganizer : IPhotoOrganizer
     private readonly IVkMethodsApiClient _vkApiClient;
     private readonly IUserContextAccessor _userContextAccessor;
     private readonly VkApiSettings _vkApiSettings;
+
+    private readonly List<string> _patterns = new List<string>
+        {
+            // 3) Линия с обозначением
+
+        @"(?<prefix>лин-|линия|л-|л|лин)?(?<line>\d+)(?<suffix>-лин|-линия|-л)?-(?<place>\d+(-\d+)*)",
+            // 2) Несколько чисел через дефис
+            // 4) Линия с СТ (без дефиса и через дефис)
+            @"(?<line>СТ\d+)-(?<place>\d+)",
+            @"(?<line>СТ)-(?<lineNum>\d+)-(?<place>\d+)",
+
+        @"(?<line>\d+)-(?<places>\d+(-\d+)+)",
+            // 1) Просто два числа через дефис
+            @"(?<line>\d+)-(?<place>\d+)",
+            
+            
+        };
 
     private readonly Regex _linkRegex = new Regex(@"https:\/\/vk\.com\/wall(?<ownerId>-?\d+)_(?<postId>\d+)", RegexOptions.IgnoreCase);
     private readonly Regex _locationRegex = new Regex(@"(?<location>\b[А-Яа-я]+\b)", RegexOptions.IgnoreCase);
@@ -91,9 +111,12 @@ public class PhotoOrganizer : IPhotoOrganizer
             .ToList();
 
         var userIds = sellerIds
-            .Where(x => x > 0);
+            .Where(x => x > 0)
+            .ToList();
 
         var groupInfos = await _vkApiClient.GetGroupsByIdAsync(groupIds);
+
+        var userInfos = await _vkApiClient.GetUsersListAsync(userIds);
 
         foreach (var seller in sellers)
         {
@@ -106,92 +129,91 @@ public class PhotoOrganizer : IPhotoOrganizer
                 seller.Name = seller.SellerInfo.Name;
                 seller.Description = seller.SellerInfo.Description;
             }
-        }
-
-        var sellerGroups = sellers
-            .Where(x => x.Id < 0)
-            .ToList();
-
-        var textBlocks = sellerGroups
-            .SelectMany(x => x.Posts)
-            .Select(x => x.Text)
-            .Union(sellerGroups.Select(x => x.Name))
-            .Union(sellerGroups.Select(x => x.Description))
-            .ToList();
-
-        Log.Information("Start names");
-
-        foreach (var seller in sellers)
-        {
-            Log.Information(seller.Name);
-        }
-
-        Log.Information("Start desc");
-
-        foreach (var seller in sellers)
-        {
-            Log.Information(seller.Description);
-        }
-
-        Log.Information("Start posts");
-
-        foreach (var seller in sellers)
-        {
-            foreach (var post in seller.Posts)
+            else
             {
-                Log.Information(post.Text);
+                seller.SellerInfo = ConvertToSellerInfo(userInfos.FirstOrDefault(x => x.Id == seller.Id));
+                seller.Name = seller.SellerInfo.Name;
+                seller.Description = seller.SellerInfo.Description;
+            }
+        }
+
+        string filePath = Path.Combine(Directory.GetCurrentDirectory(), "output.txt");
+
+        using (StreamWriter writer = new StreamWriter(filePath))
+        {
+            foreach (var seller in sellers)
+            {
+                var locName = ExtractLocation(seller.Name);
+                var locDesc = ExtractLocation(seller.Description);
+                var locsPosts = new List<(string Line, string[] Places)>();
+                foreach (var post in seller.Posts)
+                {
+                    locsPosts.Add(ExtractLocation(post.Text));
+                }
+
+                writer.WriteLine($"Продавец: {seller.Name} -> Линия: {locName.Line}, Павильоны: {string.Join(", ", locName.Places)}");
+
+                writer.WriteLine($"Описание: {seller.Description} -> Линия: {locDesc.Line}, Павильоны: {string.Join(", ", locDesc.Places)}");
+                foreach (var post in seller.Posts)
+                {
+                    var locPost = ExtractLocation(post.Text);
+                    writer.WriteLine($"Пост: {post.Text} -> Линия: {locPost.Line}, Павильоны: {string.Join(", ", locPost.Places)}");
+                }
+                writer.WriteLine();
             }
         }
     }
 
-    private async Task<(string Name, string Description)> GetSellerInfoAsync(long ownerId)
+    private (string? Line, string[] Places) ExtractLocation(string locationStrInput)
     {
-        var accessToken = _userContextAccessor.GetVkAccessToken();
-        if (ownerId < 0)
+        if (string.IsNullOrWhiteSpace(locationStrInput))
         {
-            return (await GetGroupInfoAsync(-ownerId));
+            return (null, null);
         }
-        else
+        var locationStr = RemoveSpecificNumbers(locationStrInput);
+        locationStr = PrepareString(locationStr);
+        locationStr = ReplaceDelimiters(locationStr);
+
+        string line = null;
+        List<string> pavilions = new List<string>();
+
+        foreach (var pattern in _patterns)
         {
-            return (await GetUserInfoAsync(ownerId));
+            var match = Regex.Match(locationStr, pattern, RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                line = match.Groups["line"].Value;
+                var placesGroup = match.Groups["places"];
+                if (placesGroup.Success)
+                {
+                    var places = placesGroup.Value.Split('-');
+                    pavilions.AddRange(places);
+                }
+                else
+                {
+                    var place = match.Groups["place"].Value;
+                    pavilions.AddRange(place.Split('-'));
+                }
+                break;
+            }
         }
+
+        if (line is not null && pavilions.Any())
+        {
+            return (line, pavilions.ToArray());
+        }
+
+        return (line, pavilions.ToArray());
     }
 
-    private async Task<(string, string)> GetUserInfoAsync(long userId)
+    static string ReplaceDelimiters(string input)
     {
-        var url = $"https://api.vk.com/method/users.get?user_ids={userId}&access_token={_userContextAccessor.GetVkAccessToken()}&v=5.131";
-        using (var client = new HttpClient())
-        {
-            var response = await client.GetStringAsync(url);
-            var vkResponse = JsonConvert.DeserializeObject<VkResponse<List<UserInfo>>>(response);
-            var user = vkResponse.Response[0];
-            return ($"{user.FirstName} {user.LastName}", user.LastName);
-        }
+        return Regex.Replace(input, @"[\s.:/]+", "-");
     }
 
-    private async Task<(string, string)> GetGroupInfoAsync(long groupId)
+    static string RemoveSpecificNumbers(string input)
     {
-        var url = $"https://api.vk.com/method/groups.getById?group_id={groupId}&access_token={_userContextAccessor.GetVkAccessToken()}&v=5.199&fields=description";
-        using (var client = new HttpClient())
-        {
-            var response = await client.GetStringAsync(url);
-            var vkResponse = JsonConvert.DeserializeObject<VkResponse<List<GroupInfo>>>(response);
-            var group = vkResponse.Response[0];
-            return (group.Name, group.Description);
-        }
-    }
-
-    private string ExtractLocation(Seller seller)
-    {
-        Log.Information(seller.Description);
-        Log.Information(seller.Name);
-
-        foreach (var item in seller.Posts)
-        {
-            Log.Information(item.Text);
-        }
-
-        return "";
+        return input.Replace("1000", "").Replace("1001", "");
     }
 
     private SellerInfo ConvertToSellerInfo(GroupInfo groupInfo)
@@ -203,9 +225,44 @@ public class PhotoOrganizer : IPhotoOrganizer
         };
     }
 
-    private SellerInfo ConvertToSellerInfo(UserInfo groupInfo)
+    private SellerInfo ConvertToSellerInfo(UserInfo userInfo)
     {
-        throw new NotImplementedException();
+        return new SellerInfo
+        {
+            Description = userInfo.About,
+            Name = $"{userInfo.FirstName} {userInfo.LastName}",
+        };
+    }
+
+    static string PrepareString(string input)
+    {
+        StringBuilder sb = new StringBuilder();
+        bool lastWasDigit = false;
+
+        foreach (char c in input)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                if (!lastWasDigit)
+                {
+                    continue; // Remove space if it's not between digits
+                }
+            }
+            else
+            {
+                if (char.IsDigit(c))
+                {
+                    lastWasDigit = true;
+                }
+                else
+                {
+                    lastWasDigit = false;
+                }
+                sb.Append(c);
+            }
+        }
+
+        return sb.ToString();
     }
 
     public class Seller

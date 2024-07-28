@@ -19,7 +19,6 @@ public class HttpClientBase : IHttpClient
         response.EnsureSuccessStatusCode();
 
         var content = await response.Content.ReadAsStringAsync();
-        Log.Information(content);
         return JsonConvert.DeserializeObject<T>(content);
     }
 

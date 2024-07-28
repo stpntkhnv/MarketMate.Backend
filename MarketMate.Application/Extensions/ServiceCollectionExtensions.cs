@@ -10,6 +10,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddScoped<IPurchaseService, PurchaseService>();
         services.AddScoped<IPhotoOrganizer, PhotoOrganizer>();
+        services.AddScoped<ISellersDataGenerator, SellersDataGenerator>();
 
         return services;
     }
